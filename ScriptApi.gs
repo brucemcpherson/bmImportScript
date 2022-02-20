@@ -87,6 +87,13 @@ class ScriptApi {
   checkFileCollision(collision) {
     if (this.collisions.indexOf(collision) === -1) throw new Error(`Collision ${collision} not one of ${this.collisions}`)
   }
+
+  sameFile (a, b)  {
+    return a.name === b.name && a.type === b.type
+  }
+  sameContent (a,b) {
+    return this.sameFile(a,b) && a.source === b.source
+  }
   /**
    * add files to a project
    * @param {object} param
@@ -106,8 +113,6 @@ class ScriptApi {
     const current = this.getProjectContent({ scriptId, noCache: true })
     if (!current.success) return current
 
-    const sameFile = (a, b) =>  a.name === b.name && a.type === b.type
-    const sameContent = (a,b) => sameFile(a,b) && a.source === b.source
 
     let currentFiles = current.data.files;
     // special handling of manifest file
@@ -122,11 +127,11 @@ class ScriptApi {
     } else {
 
       // if there's no change in content, we'll ignore completely
-      files = files.filter(f=>!currentFiles.some(c=>sameContent(f,c)))
+      files = files.filter(f=>!currentFiles.some(c=>this.sameContent(f,c)))
 
       switch (collision) {
         case 'abort':
-          const collisions = currentFiles.filter(c => files.find(f => sameFile(f, c)))
+          const collisions = currentFiles.filter(c => files.find(f => this.sameFile(f, c)))
           if (collisions.length) {
             return {
               ...current,
@@ -139,18 +144,18 @@ class ScriptApi {
           break;
 
         case 'replace':
-          currentFiles = currentFiles.filter(c => !files.find(f => sameFile(f, c))).concat(files)
+          currentFiles = currentFiles.filter(c => !files.find(f => this.sameFile(f, c))).concat(files)
           break;
 
         case 'skip':
-          currentFiles = currentFiles.concat(files.filter(c => !currentFiles.find(f => sameFile(f, c))))
+          currentFiles = currentFiles.concat(files.filter(c => !currentFiles.find(f => this.sameFile(f, c))))
           break;
 
         case 'rename':
           currentFiles = files.reduce((p, c) => {
             let { name } = c
             let index = 0
-            while (p.find(f => sameFile(f, { ...c, name }))) {
+            while (p.find(f => this.sameFile(f, { ...c, name }))) {
               name = c.name + '_' + index++
             }
             p.push({
