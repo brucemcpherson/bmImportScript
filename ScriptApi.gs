@@ -10,6 +10,7 @@
  * @property {object} headers the http headers
  * @property {string} content the unparsed content
  * @property {boolean} cached whether it came from cache
+ * @property {function} throw throw an error if failed or return the result - can used like getProject(params).throw()
  */
 
 
@@ -35,7 +36,11 @@ class ScriptApi {
     this.cacher = new Cacher({ cacheStore, cacheSeconds })
     const _urlCleaner = (url) => url.replace(/\/+/g, '/').replace(/\/$/, '')
     const _baseUrl = "script.googleapis.com/v1"
-    this.makeUrl = (tail = '') => 'https://' + _urlCleaner(_baseUrl + '/' + tail)
+    const joinParams = (params) => params && params.length ? ('?' + params.map(f=>{
+      return `${f[0]}=${encodeURI(f[1].toString())}`
+    }).join('&')) : ''
+    this.makeUrl = (tail = '', params) => 'https://' + _urlCleaner(_baseUrl + '/' + tail) + joinParams(params)
+    this.cacheSeconds = cacheSeconds
   }
 
 
@@ -180,6 +185,50 @@ class ScriptApi {
     return name === 'appsscript' && type === "JSON"
   } 
 
+  isServer ({type}) {
+    return type === "SERVER_JS"
+  } 
+
+  isClient ({type}) {
+    return type === "HTML"
+  } 
+
+  /**
+   * get the project deployments
+   * @param {object} params
+   * @param {string} params.scriptid the scriptid
+   * @param {boolean} params.noCache whether to skip getting from cache
+   * @param {number} params.cacheSeconds no of seconds to write to cache for after api get
+   * @returns {GotResponse}
+   */
+  listProjectDeployments ({ scriptId, noCache = false, cacheSeconds }) {
+
+    let pageToken = null
+    let allDeployments = null
+    let pargs= [['pageSize', 100]]
+    do {
+      if (pageToken) Array.prototype.push.apply(pargs, [['pageToken', pageToken]])
+      const result = this.got({
+        url: this.makeUrl(`projects/${scriptId}/deployments`, pargs),
+        noCache,
+        cacheSeconds
+      })
+      // allow caller to throw
+      if (!result.success) return result
+      // pile them up
+      const {data} = result
+      const {deployments} = data
+      pageToken = data.nextPageToken
+      if(allDeployments) {
+        Array.prototype.push.apply(allDeployments.data.deployments, deployments) 
+      } else {
+        allDeployments = result
+      }
+ 
+    } while (pageToken)
+    return allDeployments
+  }
+
   /**
    * get the project summary
    * @param {object} params
@@ -203,11 +252,12 @@ class ScriptApi {
    * @param {boolean} [params.noCache=false] whether to skip getting from cache
    * @param {number} [params.cacheSeconds] no of seconds to write to cache for after api get
    * @param {boolean} [params.skipManifest=false] whether to get the manifest too
+   * @param {string|number} [params.versionNumber=null] version number - null for latest
    * @returns {GotResponse}
    */
-  getProjectContent({ scriptId, noCache = false, cacheSeconds, skipManifest = false }) {
+  getProjectContent({ scriptId, noCache = false, cacheSeconds, skipManifest = false, versionNumber = null }) {
     const result =  this.got({
-      url: this.makeUrl(`projects/${scriptId}/content`),
+      url: this.makeUrl(`projects/${scriptId}/content`, versionNumber ? [['versionNumber', versionNumber]] : null),
       noCache,
       cacheSeconds
     })
@@ -254,13 +304,13 @@ class ScriptApi {
   * @return {GotReponse} a standard response
   */
   got({ url, options, noCache = false, cacheSeconds }) {
+    cacheSeconds = cacheSeconds || this.cacheSeconds
     options = {
       method: "GET",
       ...options
     }
-
     // use this key for caching
-    const key = url
+    const key = url 
 
     const method = options.method.toLowerCase()
     const getting = method === 'get'
@@ -279,14 +329,27 @@ class ScriptApi {
 
     // see if its in cache if we're getting
     const cached = getting && !noCache && this.cacher.get(key)
-    if (cached) return cached
 
     // wasnt in cache
-    const result = this.fetcher.got(url, options)
-    result.cached = false
+    const result = cached || this.fetcher.got(url, options)
+    result.cached = Boolean(cached)
+    
+    // add a throw method for errors
+    result.throw = () => {
+      // just return the result as is if all is good
+      if (result.success) return result
 
+      // which error to throw
+      if (result.data && result.data.error && result.data.error.message) {
+        throw new Error(result.data.error.message)
+      } else {
+        throw new Error(result.extended)
+      }
+    }
     // write away to cache for next time - if an error, we don't write (already know there's nothing in cache so no need to clear)
-    if (getting && result.success) this.cacher.put(key, result, cacheSeconds)
+    if (getting && result.success) {
+      this.cacher.put(key, result, cacheSeconds)
+    }
     return result
   }
 
