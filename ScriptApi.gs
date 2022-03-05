@@ -17,7 +17,7 @@
 
 class ScriptApi {
   /**
-   * needs thee scopes
+   * needs 2 scopes
    * https://www.googleapis.com/auth/script.external_request
    * https://www.googleapis.com/auth/script.projects
    * @param {object} param
